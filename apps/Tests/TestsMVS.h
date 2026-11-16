@@ -59,6 +59,9 @@ bool MeshCleanPerVertexTest();
 // scaling and the depth-estimation pyramid) moves the pixels exactly as the camera's K is scaled
 bool ImageResizeCameraTest();
 
+// test virtual-face view selection on an open mesh with two adjacent patches
+bool MeshTextureVirtualFaceBoundaryTest();
+
 // test the Delaunay mesh cut on the two hand-solved synthetic fixtures
 // (docs/design/DelaunayMeshReconstruction.md, Appendix)
 bool MeshBipyramidFixtureTest();
