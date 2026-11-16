@@ -137,6 +137,10 @@ bool UnitTests()
 		VERBOSE("ERROR: ImageResizeCameraTest failed!");
 		return false;
 	}
+	if (!MVS::MeshTextureVirtualFaceBoundaryTest()) {
+		VERBOSE("ERROR: MeshTextureVirtualFaceBoundaryTest failed!");
+		return false;
+	}
 	#ifdef _IMAGE_HEIF
 	// the reader's own semantics are tested next to the reader, in libs/IO/ImageHEIF.cpp
 	if (!CImageHEIF::Test(MAKE_PATH("images"))) {

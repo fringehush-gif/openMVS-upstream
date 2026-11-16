@@ -2249,6 +2249,66 @@ bool ImageResizeCameraTest()
 }
 /*----------------------------------------------------------------*/
 
+// Virtual-face edge scoring must skip the missing neighbors at an open mesh boundary.
+bool MeshTextureVirtualFaceBoundaryTest()
+{
+	const ScopedTempDir tmpDir(_T("MeshTextureVirtualFaceBoundaryTest"));
+	if (!tmpDir.IsValid())
+		return false;
+
+	// Each camera sees one side of the right-angle fold; the other side projects
+	// to an edge. The two visible virtual faces share an edge and each has two
+	// outer boundary edges, whose face-neighbor IDs are NO_ID.
+	Scene scene(1);
+	scene.mesh.vertices = {{0.f, 0.f, 0.f}, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}};
+	scene.mesh.faces = {{0, 1, 2}, {1, 0, 3}};
+	Platform& platform = scene.platforms.AddEmpty();
+	Platform::Camera& camera = platform.cameras.AddEmpty();
+	camera.K = Matrix3x3::IDENTITY;
+	camera.R = Matrix3x3::IDENTITY;
+	camera.C = Point3::ZERO;
+	const Pixel8U colors[] = {Pixel8U(40, 80, 120), Pixel8U(200, 160, 80)};
+	constexpr unsigned imageSize(128);
+	for (unsigned i = 0; i < 2; ++i) {
+		Platform::Pose& pose = platform.poses.AddEmpty();
+		pose.C = i == 0 ? Point3(0, 0, 3) : Point3(0, 3, 0);
+		pose.R.LookAt(pose.C, Point3::ZERO, i == 0 ? Point3(0, 1, 0) : Point3(0, 0, 1));
+		Image& image = scene.images.AddEmpty();
+		image.ID = i;
+		image.platformID = 0;
+		image.cameraID = 0;
+		image.poseID = i;
+		image.width = image.height = imageSize;
+		image.scale = 1.f;
+		image.name = tmpDir(String::FormatString("view%u.sci", i));
+		image.UpdateCamera(scene.platforms);
+		Image8U3 photo(imageSize, imageSize);
+		for (unsigned y = 0; y < imageSize; ++y)
+			for (unsigned x = 0; x < imageSize; ++x)
+				photo(y, x) = colors[i];
+		// The native uncompressed format needs no optional image codec.
+		IMAGEPTR output(CImage::Create(image.name, CImage::WRITE));
+		if (output == NULL || !output->WriteHeader(PF_R8G8B8, imageSize, imageSize, 1) || !output->WriteData(photo.data, PF_R8G8B8, 3, (CImage::Size)photo.step))
+			return false;
+	}
+	scene.nCalibratedImages = 2;
+
+	// The nonvirtual path verifies visibility and the expected colors first.
+	// Both paths use the same public view-selection pipeline as TextureMesh.
+	for (const unsigned minCommonCameras : {0u, 1u}) {
+		Scene colored(scene);
+		if (!colored.ComputeVertexColors(0, 0, minCommonCameras, 0.f, 0.3f, Pixel8U::BLACK, -2) || colored.mesh.vertexColors.size() != scene.mesh.vertices.size())
+			return false;
+		const Pixel8U expected[] = {Pixel8U(120, 120, 100), Pixel8U(120, 120, 100), colors[0], colors[1]};
+		FOREACH (i, colored.mesh.vertexColors)
+			if (colored.mesh.vertexColors[i] != expected[i]) {
+				VERBOSE("ERROR: virtual-face boundary colors differ at vertex %u (minCommonCameras=%u)", (unsigned)i, minCommonCameras);
+				return false;
+			}
+	}
+	return true;
+}
+
 // Exercise ROI integration with the first point outside the ROI; this used to leave
 // default entries in the spatial-sort index and could reconstruct the wrong points.
 static bool ROIMeshReconstructionTest(Scene& scene)
