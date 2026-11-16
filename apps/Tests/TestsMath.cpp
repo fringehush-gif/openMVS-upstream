@@ -35,6 +35,7 @@
 #include "Tests.h"
 #include "TestsMath.h"
 
+#include <cstring>
 #include <random>
 
 
@@ -224,16 +225,75 @@ namespace {
 LBPInference::EnergyType STCALL TestSmoothnessPotts(LBPInference::NodeID, LBPInference::NodeID, LBPInference::LabelID l1, LBPInference::LabelID l2) {
 	return l1 == l2 && l1 != 0 ? LBPInference::EnergyType(0) : LBPInference::EnergyType(1);
 }
+
+class LBPTestInference : public LBPInference
+{
+	public:
+	using LBPInference::LBPInference;
+	const std::vector<EnergyType>& Messages() const { return oldMsgs; }
+	bool SameState(const LBPTestInference& other) const
+	{
+		ASSERT(nodes.size() == other.nodes.size());
+		if (oldMsgs.size() != other.oldMsgs.size() || (!oldMsgs.empty() && std::memcmp(oldMsgs.data(), other.oldMsgs.data(), oldMsgs.size() * sizeof(EnergyType)) != 0))
+			return false;
+		for (size_t n = 0; n < nodes.size(); ++n)
+			if (nodes[n].label != other.nodes[n].label || nodes[n].dataCost != other.nodes[n].dataCost)
+				return false;
+		return true;
+	}
+};
+
+bool TestLBPNormalization()
+{
+	for (const bool usePotts : {false, true}) {
+		LBPTestInference inference(3);
+		if (usePotts)
+			inference.SetSmoothCostPotts(TestSmoothnessPotts, 1);
+		else
+			inference.SetSmoothCost(TestSmoothnessPotts);
+		inference.SetNeighbors(0, 1, 0.5f);
+		inference.SetNeighbors(1, 2, 1.5f);
+		inference.SetDataCost(3, 0, 0.5f);
+		inference.SetDataCost(0, 0, 1.25f);
+		inference.SetDataCost(7, 0, 0.75f);
+		inference.SetDataCost(7, 1, 0.25f);
+		inference.SetDataCost(3, 1, 1.5f);
+		inference.SetDataCost(0, 2, 0.25f);
+		inference.SetDataCost(3, 2, 0.5f);
+		inference.SetDataCost(7, 2, 2.f);
+		inference.Optimize(0);
+		if (inference.Messages() != std::vector<float>(10, 0.f) || inference.ComputeEnergy() != 5.f)
+			return false;
+		LBPTestInference batched(inference), automatic(inference);
+		// Exact binary fractions; edges store 0->1, 1->0, 1->2, 2->1 in this order.
+		inference.Optimize(1);
+		if (inference.Messages() != std::vector<float>({0.25f, 0.f, 0.5f, 0.5f, 0.f, 1.5f, 1.25f, 0.f, 1.25f, 0.f}) || inference.ComputeEnergy() != 6.5f)
+			return false;
+		inference.Optimize(1);
+		if (inference.Messages() != std::vector<float>({0.25f, 0.f, 0.f, 0.5f, 0.f, 1.5f, 1.f, 0.f, 1.25f, 0.f}) || inference.ComputeEnergy() != 2.5f)
+			return false;
+		batched.Optimize(2);
+		automatic.Optimize();
+		inference.Optimize(0);
+		if (!inference.SameState(batched) || !inference.SameState(automatic))
+			return false;
+	}
+	return true;
+}
 } // namespace
 
 bool TestLBPPotts()
 {
+	if (!TestLBPNormalization()) {
+		VERBOSE("error: LBP message normalization or iteration state differs");
+		return false;
+	}
 	std::mt19937 rng(20261012u);
 	std::uniform_real_distribution<float> unit(0.f, 1.f);
 	for (int iter = 0; iter < 50; ++iter) {
 		// a ring of nodes plus random chords; each node a random label subset, in random order, label 0 included at times
 		const unsigned numNodes(2 + rng() % 200), numLabels(1 + rng() % 40);
-		LBPInference generic(numNodes), potts(numNodes);
+		LBPTestInference generic(numNodes), potts(numNodes);
 		generic.SetSmoothCost(TestSmoothnessPotts);
 		potts.SetSmoothCostPotts(TestSmoothnessPotts, 1);
 		for (unsigned n = 0; n < numNodes; ++n) {
@@ -257,16 +317,14 @@ bool TestLBPPotts()
 				potts.SetDataCost(labels[k], n, cost);
 			}
 		}
-		// the labels, not the energies: the energy follows from the labels, and ComputeEnergy's
-		// OpenMP reduction sums in no fixed order
+		// Compare complete messages and selected labels/costs, not ComputeEnergy's unordered
+		// OpenMP reduction. A message error can affect labels only in a later iteration.
 		for (unsigned i = 0; i < 6; ++i) {
 			generic.Optimize(1);
 			potts.Optimize(1);
-			for (unsigned n = 0; n < numNodes; ++n) {
-				if (generic.GetLabel(n) != potts.GetLabel(n)) {
-					VERBOSE("error: LBP iteration %d/%u: node %u has label %u by the Potts path, %u by the generic one", iter, i, n, potts.GetLabel(n), generic.GetLabel(n));
-					return false;
-				}
+			if (!generic.SameState(potts)) {
+				VERBOSE("error: LBP iteration %d/%u: generic and Potts state differs", iter, i);
+				return false;
 			}
 		}
 	}
